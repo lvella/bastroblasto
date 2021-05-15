@@ -405,6 +405,7 @@ fn update_shot_ttl(mut commands: Commands, time: Res<Time>, mut query: Query<(En
 
 fn player_rock_collision(
     mut exit: EventWriter<AppExit>,
+    score_query: Query<&Score>,
     player_query: Query<(&Transform, &BBox), With<Player>>,
     rock_query: Query<(&Transform, &BBox), With<Rock>>)
 {
@@ -413,6 +414,8 @@ fn player_rock_collision(
     for (rt, rbox) in rock_query.iter() {
         if test_hit(Vec2::from(pt.translation), pbox.bbox_size,
                     Vec2::from(rt.translation), rbox.bbox_size) {
+            let score = score_query.single().expect("Score must exist!");
+            println!("Your score: {}", score.value);
             exit.send(AppExit);
         }
     }
