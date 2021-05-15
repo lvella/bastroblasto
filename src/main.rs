@@ -25,6 +25,8 @@ const PLAYER_TURN_RATE: f32 = 3.0;
 /// Refire delay between shots.
 const PLAYER_SHOT_TIME: Duration = Duration::from_millis(500);
 
+const MAX_PHYSICS_VEL: f32 = 250.0;
+
 // Components:
 
 struct Player {
@@ -129,6 +131,25 @@ fn test_hit(pa: Vec2, ra: f32, pb: Vec2, rb: f32) -> bool
     pa.distance_squared(pb) < (ra + rb).powi(2)
 }
 
+/// Takes an actor and wraps its position to the bounds of the
+/// screen, so if it goes off the left side of the screen it
+/// will re-enter on the right side and so on.
+fn wrap_actor_position(pos: &mut Vec3, sx: f32, sy: f32) {
+    // Wrap screen
+    let screen_x_bounds = sx / 2.0;
+    let screen_y_bounds = sy / 2.0;
+    if pos.x >= screen_x_bounds {
+        pos.x -= sx;
+    } else if pos.x < -screen_x_bounds {
+        pos.x += sx;
+    };
+    if pos.y >= screen_y_bounds {
+        pos.y -= sy;
+    } else if pos.y < -screen_y_bounds {
+        pos.y += sy;
+    };
+}
+
 fn next_level(
     w: &Window,
     pre_loaded_assets: &PreLoadedAssets,
@@ -151,11 +172,13 @@ fn next_level(
 
         let mut pos;
         while {
+            let hw = w.width() * 0.5;
+            let hh = w.height() * 0.5;
             pos = Vec2::new(
-                rng.gen_range(0.0..w.width()),
-                rng.gen_range(0.0..w.height())
+                rng.gen_range(-hw..hw),
+                rng.gen_range(-hh..hh)
             );
-            test_hit(pos, ROCK_BBOX, exclusion, PLAYER_BBOX*3.0)
+            test_hit(pos, ROCK_BBOX, exclusion, PLAYER_BBOX*5.0)
         } {};
 
         let translation = Vec3::from((pos, 0.0));
@@ -344,27 +367,6 @@ fn control(mut commands: Commands,
     }
 }
 
-const MAX_PHYSICS_VEL: f32 = 250.0;
-
-/// Takes an actor and wraps its position to the bounds of the
-/// screen, so if it goes off the left side of the screen it
-/// will re-enter on the right side and so on.
-fn wrap_actor_position(t: &mut Transform, sx: f32, sy: f32) {
-    // Wrap screen
-    let screen_x_bounds = sx / 2.0;
-    let screen_y_bounds = sy / 2.0;
-    if t.translation.x > screen_x_bounds {
-        t.translation.x -= sx;
-    } else if t.translation.x < -screen_x_bounds {
-        t.translation.x += sx;
-    };
-    if t.translation.y > screen_y_bounds {
-        t.translation.y -= sy;
-    } else if t.translation.y < -screen_y_bounds {
-        t.translation.y += sy;
-    };
-}
-
 fn update_box_position(windows: Res<Windows>, time: Res<Time>, mut query: Query<(&mut Transform, &mut BBox)>)
 {
     let window = windows.get_primary().expect("Window must exist!");
@@ -375,7 +377,7 @@ fn update_box_position(windows: Res<Windows>, time: Res<Time>, mut query: Query<
         let dv = dt * bx.velocity;
         t.translation += Vec3::from((dv, 0.0));
 
-        wrap_actor_position(&mut *t, window.width(), window.height());
+        wrap_actor_position(&mut t.translation, window.width(), window.height());
     }
 }
 
