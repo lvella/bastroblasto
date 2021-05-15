@@ -3,6 +3,8 @@ use bevy::app::AppExit;
 use rand::Rng;
 use std::time::{Instant, Duration};
 
+// Game constants:
+
 const SHOT_TTL: Duration = Duration::from_secs(2);
 
 const PLAYER_BBOX: f32 = 12.0;
@@ -23,15 +25,19 @@ const PLAYER_TURN_RATE: f32 = 3.0;
 /// Refire delay between shots.
 const PLAYER_SHOT_TIME: Duration = Duration::from_millis(500);
 
+// Components:
+
 struct Player {
     last_shot_time: Instant
 }
+
 struct Rock;
+
 struct Shot {
     ttl: Duration,
 }
 
-struct Box {
+struct BBox {
     velocity: Vec2,
     bbox_size: f32,
 }
@@ -39,6 +45,35 @@ struct Box {
 struct Spinner {
     ang_vel: f32
 }
+
+// Entity bundles:
+
+#[derive(Bundle)]
+struct PlayerBundle {
+    player: Player,
+    bbox: BBox,
+    #[bundle]
+    sprite: SpriteBundle,
+}
+
+#[derive(Bundle)]
+struct RockBundle {
+    rock: Rock,
+    bbox: BBox,
+    #[bundle]
+    sprite: SpriteBundle,
+}
+
+#[derive(Bundle)]
+struct ShotBundle {
+    shot: Shot,
+    bbox: BBox,
+    spinner: Spinner,
+    #[bundle]
+    sprite: SpriteBundle,
+}
+
+// Global resources:
 
 #[derive(Default)]
 struct PreLoadedAssets
@@ -50,6 +85,21 @@ struct PreLoadedAssets
     hit_sound: Handle<AudioSource>,
 }
 
+#[derive(Default)]
+struct Level {
+    level: u16,
+    rock_kill_count: u16
+}
+
+impl Level {
+    fn total_rock_count(&self) -> u16
+    {
+        self.level + 4
+    }
+}
+
+// Free helper functions:
+
 fn rand_orientation() -> Quat
 {
     Quat::from_rotation_z(rand::thread_rng().gen_range(0.0_f32 .. (2.0_f32 * std::f32::consts::PI)))
@@ -60,12 +110,62 @@ fn test_hit(pa: Vec2, ra: f32, pb: Vec2, rb: f32) -> bool
     pa.distance_squared(pb) < (ra + rb).powi(2)
 }
 
+// Systems:
+
+fn setup_level(
+    w: &Window,
+    pre_loaded_assets: &PreLoadedAssets,
+    commands: &mut Commands,
+    level: u16,
+    exclusion: Vec2
+) -> Level {
+    let mut rng = rand::thread_rng();
+
+    let ret = Level {
+        level,
+        rock_kill_count: 0
+    };
+
+    for _ in 0..ret.total_rock_count() {
+        let velocity = Vec2::from(rand_orientation().mul_vec3(
+            Vec3::new(rng.gen_range(0.0..MAX_ROCK_VEL), 0.0, 0.0)
+        ));
+
+        let mut pos;
+        while {
+            pos = Vec2::new(
+                rng.gen_range(0.0..w.width()),
+                rng.gen_range(0.0..w.height())
+            );
+            test_hit(pos, ROCK_BBOX, exclusion, PLAYER_BBOX*3.0)
+        } {};
+
+        let translation = Vec3::from((pos, 0.0));
+
+        (*commands).spawn_bundle(RockBundle{
+            rock: Rock,
+            bbox: BBox{
+                velocity,
+                bbox_size: ROCK_BBOX
+            },
+            sprite: SpriteBundle {
+                material: pre_loaded_assets.rock_mat.clone(),
+                transform: Transform{translation,..Default::default()},
+                ..Default::default()
+            },
+        });
+    }
+
+    ret
+}
+
 fn setup(
-    windows: Res<Windows>,
     mut commands: Commands,
+    windows: Res<Windows>,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut pre_loaded_assets: ResMut<PreLoadedAssets>)
+    mut pre_loaded_assets: ResMut<PreLoadedAssets>,
+    mut level: ResMut<Level>)
 {
     // Load all assets
     pre_loaded_assets.shot_mat = materials.add(asset_server.load("shot.png").into());
@@ -77,62 +177,29 @@ fn setup(
     let player_mat = materials.add(asset_server.load("player.png").into());
 
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
-    commands.spawn()
-        .insert(Player{
+    commands.spawn_bundle(PlayerBundle{
+        player: Player{
             last_shot_time: Instant::now() - 2*PLAYER_SHOT_TIME
-        })
-        .insert(Box{
+        },
+        bbox: BBox{
             velocity: Vec2::ZERO,
             bbox_size: PLAYER_BBOX,
-        })
-        .insert_bundle(
-            SpriteBundle {
-                material: player_mat,
-                ..Default::default()
-            }
-        );
-
-    let mut rng = rand::thread_rng();
+        },
+        sprite: SpriteBundle {
+            material: player_mat,
+            ..Default::default()
+        }
+    });
 
     let w = windows.get_primary().expect("Window must exist!");
-
-    for _ in 0..5 {
-        let velocity = Vec2::from(rand_orientation().mul_vec3(
-            Vec3::new(rng.gen_range(0.0..MAX_ROCK_VEL), 0.0, 0.0)
-        ));
-
-        let mut pos;
-        while {
-            pos = Vec2::new(
-                rng.gen_range(0.0..w.width()),
-                rng.gen_range(0.0..w.height())
-            );
-            test_hit(pos, ROCK_BBOX, Vec2::ZERO, PLAYER_BBOX)
-        } {};
-
-        let translation = Vec3::from((pos, 0.0));
-
-        commands.spawn()
-            .insert(Rock)
-            .insert(Box{
-                velocity,
-                bbox_size: ROCK_BBOX
-            })
-            .insert_bundle(
-                SpriteBundle {
-                    material: pre_loaded_assets.rock_mat.clone_weak(),
-                    transform: Transform{translation,..Default::default()},
-                    ..Default::default()
-                }
-            );
-    }
+    *level = setup_level(w, &pre_loaded_assets, &mut commands, 1, Vec2::ZERO);
 }
 
 fn control(mut commands: Commands,
     keyboard_input: Res<Input<KeyCode>>,
     time: Res<Time>, audio: Res<Audio>,
     pre_loaded_assets: Res<PreLoadedAssets>,
-    mut query: Query<(&mut Player, &mut Transform, &mut Box)>)
+    mut query: Query<(&mut Player, &mut Transform, &mut BBox)>)
 {
     let mut direction = 0.0;
     if keyboard_input.pressed(KeyCode::Left) {
@@ -174,25 +241,24 @@ fn control(mut commands: Commands,
 
                 let velocity = SHOT_SPEED * forward_dir + bx.velocity;
 
-                commands.spawn()
-                    .insert(Shot{
+                commands.spawn_bundle(ShotBundle {
+                    shot: Shot{
                         ttl: SHOT_TTL
-                    })
-                    .insert(Box{
+                    },
+                    bbox: BBox{
                         bbox_size: SHOT_BBOX,
                         velocity
-                    })
-                    .insert(Spinner{
+                    },
+                    spinner: Spinner{
                         ang_vel: SHOT_ANG_VEL
-                    })
-                    .insert_bundle(
-                        SpriteBundle {
-                            material: pre_loaded_assets.shot_mat.clone_weak(),
-                            transform: *t,
-                            ..Default::default()
-                        }
-                    );
-                audio.play(pre_loaded_assets.shot_sound.clone_weak());
+                    },
+                    sprite: SpriteBundle {
+                        material: pre_loaded_assets.shot_mat.clone(),
+                        transform: *t,
+                        ..Default::default()
+                    }
+                });
+                audio.play(pre_loaded_assets.shot_sound.clone());
             }
         }
     }
@@ -219,7 +285,7 @@ fn wrap_actor_position(t: &mut Transform, sx: f32, sy: f32) {
     };
 }
 
-fn update_box_position(windows: Res<Windows>, time: Res<Time>, mut query: Query<(&mut Transform, &mut Box)>)
+fn update_box_position(windows: Res<Windows>, time: Res<Time>, mut query: Query<(&mut Transform, &mut BBox)>)
 {
     let window = windows.get_primary().expect("Window must exist!");
     let dt = time.delta_seconds();
@@ -257,8 +323,8 @@ fn update_shot_ttl(mut commands: Commands, time: Res<Time>, mut query: Query<(En
 
 fn player_rock_collision(
     mut exit: EventWriter<AppExit>,
-    player_query: Query<(&Transform, &Box), With<Player>>,
-    rock_query: Query<(&Transform, &Box), With<Rock>>)
+    player_query: Query<(&Transform, &BBox), With<Player>>,
+    rock_query: Query<(&Transform, &BBox), With<Rock>>)
 {
     let (pt, pbox) = player_query.single().expect("Player must exist!");
 
@@ -272,10 +338,13 @@ fn player_rock_collision(
 
 fn rock_shot_collision(
     mut commands: Commands,
+    windows: Res<Windows>,
     audio: Res<Audio>,
     pre_loaded_assets: Res<PreLoadedAssets>,
-    rock_query: Query<(Entity, &Transform, &Box), With<Rock>>,
-    shot_query: Query<(Entity, &Transform, &Box), With<Shot>>)
+    mut level: ResMut<Level>,
+    player_query: Query<&Transform, With<Player>>,
+    rock_query: Query<(Entity, &Transform, &BBox), With<Rock>>,
+    shot_query: Query<(Entity, &Transform, &BBox), With<Shot>>)
 {
     for (re, rt, rbox) in shot_query.iter() {
         for (se, st, sbox) in rock_query.iter() {
@@ -283,9 +352,18 @@ fn rock_shot_collision(
                         Vec2::from(rt.translation), rbox.bbox_size) {
                 commands.entity(se).despawn();
                 commands.entity(re).despawn();
-                audio.play(pre_loaded_assets.hit_sound.clone_weak());
+                audio.play(pre_loaded_assets.hit_sound.clone());
+                level.rock_kill_count += 1;
             }
         }
+    }
+
+    if level.rock_kill_count == level.total_rock_count() {
+        // Next level:
+        let window = windows.get_primary().expect("Window must exist!");
+        let player = player_query.single().expect("Player must exist!");
+        *level = setup_level(window, &pre_loaded_assets, &mut commands,
+            level.level+1, Vec2::from(player.translation));
     }
 }
 
@@ -300,6 +378,7 @@ fn main()
             ..Default::default()
         })
         .insert_resource(PreLoadedAssets{..Default::default()})
+        .insert_resource(Level{..Default::default()})
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup.system())
         .add_system(control.system())
