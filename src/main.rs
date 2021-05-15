@@ -1,9 +1,8 @@
 use bevy::prelude::*;
+use bevy::app::AppExit;
 use rand::Rng;
 use std::time::{Instant, Duration};
 
-const PLAYER_LIFE: f32 = 1.0;
-const ROCK_LIFE: f32 = 1.0;
 const SHOT_TTL: Duration = Duration::from_secs(2);
 
 const PLAYER_BBOX: f32 = 12.0;
@@ -11,9 +10,6 @@ const ROCK_BBOX: f32 = 12.0;
 const SHOT_BBOX: f32 = 6.0;
 
 const MAX_ROCK_VEL: f32 = 50.0;
-
-/// How fast a rock rotates
-const ROCK_ANG_VEL: f32 = 0.5;
 
 /// How fast shots move.
 const SHOT_SPEED: f32 = 200.0;
@@ -98,39 +94,37 @@ fn setup(
 
     let mut rng = rand::thread_rng();
 
-    if let Some(w) = windows.get_primary() {
-        for _ in 0..5 {
-            let velocity = Vec2::from(rand_orientation().mul_vec3(
-                Vec3::new(rng.gen_range(0.0..MAX_ROCK_VEL), 0.0, 0.0)
-            ));
+    let w = windows.get_primary().expect("Window must exist!");
 
-            let mut pos;
-            while {
-                pos = Vec2::new(
-                    rng.gen_range(0.0..w.width()),
-                    rng.gen_range(0.0..w.height())
-                );
-                test_hit(pos, ROCK_BBOX, Vec2::ZERO, PLAYER_BBOX)
-            } {};
+    for _ in 0..5 {
+        let velocity = Vec2::from(rand_orientation().mul_vec3(
+            Vec3::new(rng.gen_range(0.0..MAX_ROCK_VEL), 0.0, 0.0)
+        ));
 
-            let translation = Vec3::from((pos, 0.0));
+        let mut pos;
+        while {
+            pos = Vec2::new(
+                rng.gen_range(0.0..w.width()),
+                rng.gen_range(0.0..w.height())
+            );
+            test_hit(pos, ROCK_BBOX, Vec2::ZERO, PLAYER_BBOX)
+        } {};
 
-            commands.spawn()
-                .insert(Rock)
-                .insert(Box{
-                    velocity,
-                    bbox_size: ROCK_BBOX
-                })
-                .insert_bundle(
-                    SpriteBundle {
-                        material: pre_loaded_assets.rock_mat.clone_weak(),
-                        transform: Transform{translation,..Default::default()},
-                        ..Default::default()
-                    }
-                );
-        }
-    } else {
-        panic!("No window found!");
+        let translation = Vec3::from((pos, 0.0));
+
+        commands.spawn()
+            .insert(Rock)
+            .insert(Box{
+                velocity,
+                bbox_size: ROCK_BBOX
+            })
+            .insert_bundle(
+                SpriteBundle {
+                    material: pre_loaded_assets.rock_mat.clone_weak(),
+                    transform: Transform{translation,..Default::default()},
+                    ..Default::default()
+                }
+            );
     }
 }
 
@@ -154,56 +148,53 @@ fn control(mut commands: Commands,
 
     let dt = time.delta_seconds();
 
-    match query.single_mut() {
-        Ok((mut player, mut t, mut bx)) => {
-            // First rotate the Player:
-            t.rotate(Quat::from_rotation_z(dt * PLAYER_TURN_RATE * direction));
+    let (mut player, mut t, mut bx) = query.single_mut().expect("Player must exist!");
 
-            // Then accelerate player in thrust direction:
-            let forward_dir = Vec2::from(t.rotation.mul_vec3(Vec3::Y));
-            if thrust {
-                let thrust_delta = dt * PLAYER_THRUST * forward_dir;
-                bx.velocity += thrust_delta;
+    // First rotate the Player:
+    t.rotate(Quat::from_rotation_z(dt * PLAYER_TURN_RATE * direction));
 
-                // Clamp the velocity to the max efficiently
-                let norm_sq = bx.velocity.length_squared();
-                if norm_sq > MAX_PHYSICS_VEL.powi(2) {
-                    bx.velocity = bx.velocity / norm_sq.sqrt() * MAX_PHYSICS_VEL;
-                }
-            }
+    // Then accelerate player in thrust direction:
+    let forward_dir = Vec2::from(t.rotation.mul_vec3(Vec3::Y));
+    if thrust {
+        let thrust_delta = dt * PLAYER_THRUST * forward_dir;
+        bx.velocity += thrust_delta;
 
-            // If possible, shot
-            if shot {
-                if let Some(now) = time.last_update() {
-                    if now.saturating_duration_since(player.last_shot_time) > PLAYER_SHOT_TIME {
-                        player.last_shot_time = now;
+        // Clamp the velocity to the max efficiently
+        let norm_sq = bx.velocity.length_squared();
+        if norm_sq > MAX_PHYSICS_VEL.powi(2) {
+            bx.velocity = bx.velocity / norm_sq.sqrt() * MAX_PHYSICS_VEL;
+        }
+    }
 
-                        let velocity = SHOT_SPEED * forward_dir + bx.velocity;
+    // If possible, shot
+    if shot {
+        if let Some(now) = time.last_update() {
+            if now.saturating_duration_since(player.last_shot_time) > PLAYER_SHOT_TIME {
+                player.last_shot_time = now;
 
-                        commands.spawn()
-                            .insert(Shot{
-                                ttl: SHOT_TTL
-                            })
-                            .insert(Box{
-                                bbox_size: SHOT_BBOX,
-                                velocity
-                            })
-                            .insert(Spinner{
-                                ang_vel: SHOT_ANG_VEL
-                            })
-                            .insert_bundle(
-                                SpriteBundle {
-                                    material: pre_loaded_assets.shot_mat.clone_weak(),
-                                    transform: *t,
-                                    ..Default::default()
-                                }
-                            );
-                        audio.play(pre_loaded_assets.shot_sound.clone_weak());
-                    }
-                }
+                let velocity = SHOT_SPEED * forward_dir + bx.velocity;
+
+                commands.spawn()
+                    .insert(Shot{
+                        ttl: SHOT_TTL
+                    })
+                    .insert(Box{
+                        bbox_size: SHOT_BBOX,
+                        velocity
+                    })
+                    .insert(Spinner{
+                        ang_vel: SHOT_ANG_VEL
+                    })
+                    .insert_bundle(
+                        SpriteBundle {
+                            material: pre_loaded_assets.shot_mat.clone_weak(),
+                            transform: *t,
+                            ..Default::default()
+                        }
+                    );
+                audio.play(pre_loaded_assets.shot_sound.clone_weak());
             }
         }
-        _ => panic!("Player must always exist!")
     }
 }
 
@@ -230,18 +221,15 @@ fn wrap_actor_position(t: &mut Transform, sx: f32, sy: f32) {
 
 fn update_box_position(windows: Res<Windows>, time: Res<Time>, mut query: Query<(&mut Transform, &mut Box)>)
 {
-    if let Some(window) = windows.get_primary() {
-        let dt = time.delta_seconds();
+    let window = windows.get_primary().expect("Window must exist!");
+    let dt = time.delta_seconds();
 
-        for (mut t, bx) in query.iter_mut() {
-            // Translate it:
-            let dv = dt * bx.velocity;
-            t.translation += Vec3::from((dv, 0.0));
+    for (mut t, bx) in query.iter_mut() {
+        // Translate it:
+        let dv = dt * bx.velocity;
+        t.translation += Vec3::from((dv, 0.0));
 
-            wrap_actor_position(&mut *t, window.width(), window.height());
-        }
-    } else {
-        panic!("No window found!");
+        wrap_actor_position(&mut *t, window.width(), window.height());
     }
 }
 
@@ -267,6 +255,40 @@ fn update_shot_ttl(mut commands: Commands, time: Res<Time>, mut query: Query<(En
     }
 }
 
+fn player_rock_collision(
+    mut exit: EventWriter<AppExit>,
+    player_query: Query<(&Transform, &Box), With<Player>>,
+    rock_query: Query<(&Transform, &Box), With<Rock>>)
+{
+    let (pt, pbox) = player_query.single().expect("Player must exist!");
+
+    for (rt, rbox) in rock_query.iter() {
+        if test_hit(Vec2::from(pt.translation), pbox.bbox_size,
+                    Vec2::from(rt.translation), rbox.bbox_size) {
+            exit.send(AppExit);
+        }
+    }
+}
+
+fn rock_shot_collision(
+    mut commands: Commands,
+    audio: Res<Audio>,
+    pre_loaded_assets: Res<PreLoadedAssets>,
+    rock_query: Query<(Entity, &Transform, &Box), With<Rock>>,
+    shot_query: Query<(Entity, &Transform, &Box), With<Shot>>)
+{
+    for (re, rt, rbox) in shot_query.iter() {
+        for (se, st, sbox) in rock_query.iter() {
+            if test_hit(Vec2::from(st.translation), sbox.bbox_size,
+                        Vec2::from(rt.translation), rbox.bbox_size) {
+                commands.entity(se).despawn();
+                commands.entity(re).despawn();
+                audio.play(pre_loaded_assets.hit_sound.clone_weak());
+            }
+        }
+    }
+}
+
 fn main()
 {
     App::build()
@@ -284,5 +306,7 @@ fn main()
         .add_system(update_box_position.system())
         .add_system(update_spinner_spin.system())
         .add_system(update_shot_ttl.system())
+        .add_system(player_rock_collision.system())
+        .add_system(rock_shot_collision.system())
         .run();
 }
