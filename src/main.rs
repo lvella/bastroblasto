@@ -46,6 +46,17 @@ struct Spinner {
     ang_vel: f32
 }
 
+#[derive(Default)]
+struct Level {
+    level: u16,
+    rock_kill_count: u16
+}
+
+#[derive(Default)]
+struct Score {
+    value: u32
+}
+
 // Entity bundles:
 
 #[derive(Bundle)]
@@ -73,6 +84,20 @@ struct ShotBundle {
     sprite: SpriteBundle,
 }
 
+#[derive(Bundle)]
+struct LevelBundle {
+    level: Level,
+    #[bundle]
+    text2d: Text2dBundle
+}
+
+#[derive(Bundle)]
+struct ScoreBundle {
+    score: Score,
+    #[bundle]
+    text2d: Text2dBundle
+}
+
 // Global resources:
 
 #[derive(Default)]
@@ -83,12 +108,6 @@ struct PreLoadedAssets
 
     shot_sound: Handle<AudioSource>,
     hit_sound: Handle<AudioSource>,
-}
-
-#[derive(Default)]
-struct Level {
-    level: u16,
-    rock_kill_count: u16
 }
 
 impl Level {
@@ -110,23 +129,22 @@ fn test_hit(pa: Vec2, ra: f32, pb: Vec2, rb: f32) -> bool
     pa.distance_squared(pb) < (ra + rb).powi(2)
 }
 
-// Systems:
-
-fn setup_level(
+fn next_level(
     w: &Window,
     pre_loaded_assets: &PreLoadedAssets,
     commands: &mut Commands,
-    level: u16,
+    level: &mut Level,
+    level_text: &mut Text,
     exclusion: Vec2
-) -> Level {
+) {
     let mut rng = rand::thread_rng();
 
-    let ret = Level {
-        level,
-        rock_kill_count: 0
-    };
+    level.rock_kill_count = 0;
+    level.level += 1;
 
-    for _ in 0..ret.total_rock_count() {
+    level_text.sections[0].value = format!("Level: {}", level.level);
+
+    for _ in 0..level.total_rock_count() {
         let velocity = Vec2::from(rand_orientation().mul_vec3(
             Vec3::new(rng.gen_range(0.0..MAX_ROCK_VEL), 0.0, 0.0)
         ));
@@ -155,17 +173,21 @@ fn setup_level(
             },
         });
     }
-
-    ret
 }
+
+fn write_score(score: &Score) -> String
+{
+    format!("Score: {}", score.value)
+}
+
+// Systems:
 
 fn setup(
     mut commands: Commands,
     windows: Res<Windows>,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut pre_loaded_assets: ResMut<PreLoadedAssets>,
-    mut level: ResMut<Level>)
+    mut pre_loaded_assets: ResMut<PreLoadedAssets>)
 {
     // Load all assets
     pre_loaded_assets.shot_mat = materials.add(asset_server.load("shot.png").into());
@@ -174,9 +196,70 @@ fn setup(
     pre_loaded_assets.shot_sound = asset_server.load("pew.ogg");
     pre_loaded_assets.hit_sound = asset_server.load("boom.ogg");
 
-    let player_mat = materials.add(asset_server.load("player.png").into());
+    let font = asset_server.load("LiberationMono-Regular.ttf");
 
+    // Create camera
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+
+    // Create Level
+    let w = windows.get_primary().expect("Window must exist!");
+    let to_top_left = Vec3::new(-w.width() * 0.5, w.height() * 0.5, 0.0);
+
+    let mut level: Level = Default::default();
+    let mut level_text = Text::with_section(
+        "",
+        TextStyle {
+            font: font.clone(),
+            font_size: 32.0,
+            color: Color::WHITE,
+        },
+        TextAlignment {
+            vertical: VerticalAlign::Bottom,
+            horizontal: HorizontalAlign::Right,
+        },
+    );
+
+    next_level(w, &pre_loaded_assets, &mut commands, &mut level, &mut level_text, Vec2::ZERO);
+
+    commands.spawn_bundle(LevelBundle{
+        level,
+        text2d: Text2dBundle{
+            text: level_text,
+            transform: Transform {
+                translation: Vec3::new(10.0, -10.0, 0.0) + to_top_left,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
+    // Create score
+    let score = Score{ value: 0 };
+    let score_text = write_score(&score);
+    commands.spawn_bundle(ScoreBundle{
+        score,
+        text2d: Text2dBundle{
+            text: Text::with_section(
+                score_text,
+                TextStyle {
+                    font,
+                    font_size: 32.0,
+                    color: Color::WHITE,
+                },
+                TextAlignment {
+                    vertical: VerticalAlign::Bottom,
+                    horizontal: HorizontalAlign::Right,
+                },
+            ),
+            transform: Transform {
+                translation: Vec3::new(200.0, -10.0, 0.0) + to_top_left,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
+    let player_mat = materials.add(asset_server.load("player.png").into());
     commands.spawn_bundle(PlayerBundle{
         player: Player{
             last_shot_time: Instant::now() - 2*PLAYER_SHOT_TIME
@@ -190,9 +273,6 @@ fn setup(
             ..Default::default()
         }
     });
-
-    let w = windows.get_primary().expect("Window must exist!");
-    *level = setup_level(w, &pre_loaded_assets, &mut commands, 1, Vec2::ZERO);
 }
 
 fn control(mut commands: Commands,
@@ -341,7 +421,10 @@ fn rock_shot_collision(
     windows: Res<Windows>,
     audio: Res<Audio>,
     pre_loaded_assets: Res<PreLoadedAssets>,
-    mut level: ResMut<Level>,
+    mut text_elems: QuerySet<(
+        Query<(&mut Level, &mut Text)>,
+        Query<(&mut Score, &mut Text)>,
+    )>,
     player_query: Query<&Transform, With<Player>>,
     rock_query: Query<(Entity, &Transform, &BBox), With<Rock>>,
     shot_query: Query<(Entity, &Transform, &BBox), With<Shot>>)
@@ -353,17 +436,31 @@ fn rock_shot_collision(
                 commands.entity(se).despawn();
                 commands.entity(re).despawn();
                 audio.play(pre_loaded_assets.hit_sound.clone());
-                level.rock_kill_count += 1;
+
+                // Update level status
+                {
+                    let (mut level, _) = text_elems.q0_mut().single_mut().expect("Level must exist!");
+                    level.rock_kill_count += 1;
+                }
+
+                // Update score:
+                {
+                    let (mut score, mut score_text) =
+                        text_elems.q1_mut().single_mut().expect("Score must exist!");
+                    score.value += 1;
+                    score_text.sections[0].value = write_score(&score);
+                }
             }
         }
     }
 
+    let (mut level, mut level_text) = text_elems.q0_mut().single_mut().expect("Level must exist!");
     if level.rock_kill_count == level.total_rock_count() {
         // Next level:
         let window = windows.get_primary().expect("Window must exist!");
         let player = player_query.single().expect("Player must exist!");
-        *level = setup_level(window, &pre_loaded_assets, &mut commands,
-            level.level+1, Vec2::from(player.translation));
+        next_level(window, &pre_loaded_assets, &mut commands,
+            &mut level, &mut level_text, Vec2::from(player.translation));
     }
 }
 
@@ -378,7 +475,6 @@ fn main()
             ..Default::default()
         })
         .insert_resource(PreLoadedAssets{..Default::default()})
-        .insert_resource(Level{..Default::default()})
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup.system())
         .add_system(control.system())
