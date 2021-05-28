@@ -469,6 +469,50 @@ fn rock_shot_collision(
     }
 }
 
+
+fn rock_rock_collision(
+    mut rock_query: Query<(&mut Transform, &mut BBox), With<Rock>>)
+{
+    let mut rocks_pos = Vec::<Vec2>::new();
+    let mut rocks_vel = Vec::<Vec2>::new();
+    for (t, b) in rock_query.iter_mut() {
+        rocks_pos.push(Vec2::from(t.translation));
+        rocks_vel.push(b.velocity);
+    }
+
+    for a in 0..rocks_pos.len() {
+        for b in 0..rocks_pos.len() {
+            if a != b &&
+                test_hit(rocks_pos[a], ROCK_BBOX,
+                         rocks_pos[b], ROCK_BBOX)
+            {
+                // Transfer velocities:
+                let normal = (rocks_pos[a] - rocks_pos[b]).normalize();
+
+                let to_b_vel = rocks_vel[a].dot(normal) * normal;
+                let to_a_vel = rocks_vel[b].dot(normal) * normal;
+
+                let new_b_vel = rocks_vel[b] - to_a_vel + to_b_vel;
+                let new_a_vel = rocks_vel[a] - to_b_vel + to_a_vel;
+
+                rocks_vel[a] = new_a_vel;
+                rocks_vel[b] = new_b_vel;
+
+                // Separate them by 1 pixel
+                const MIN_DIST: f32 = ROCK_BBOX + 1.0;
+                let middle = (rocks_pos[a] + rocks_pos[b]) * 0.5;
+                rocks_pos[a] = middle + normal * MIN_DIST;
+                rocks_pos[b] = middle - normal * MIN_DIST;
+            }
+        }
+    }
+
+    for (((mut t, mut b), new_vel), new_pos) in rock_query.iter_mut().zip(rocks_vel).zip(rocks_pos) {
+        t.translation = Vec3::from((new_pos, 0.0));
+        b.velocity = new_vel;
+    }
+}
+
 fn main()
 {
     App::build()
@@ -488,5 +532,6 @@ fn main()
         .add_system(update_shot_ttl.system())
         .add_system(player_rock_collision.system())
         .add_system(rock_shot_collision.system())
+        .add_system(rock_rock_collision.system())
         .run();
 }
