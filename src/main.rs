@@ -481,10 +481,9 @@ fn rock_rock_collision(
     }
 
     for a in 0..rocks_pos.len() {
-        for b in 0..rocks_pos.len() {
-            if a != b &&
-                test_hit(rocks_pos[a], ROCK_BBOX,
-                         rocks_pos[b], ROCK_BBOX)
+        for b in a+1..rocks_pos.len() {
+            if test_hit(rocks_pos[a], ROCK_BBOX,
+                        rocks_pos[b], ROCK_BBOX)
             {
                 // Transfer velocities:
                 let normal = (rocks_pos[a] - rocks_pos[b]).normalize();
